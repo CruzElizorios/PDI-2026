@@ -1,0 +1,103 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =============================================================================
+# 1. PREPROCESAMIENTO Y DETECCIÓN DE FILAS (PUNTO 1 REVISADO)
+# =============================================================================
+
+imagenOriginal = cv2.imread('tp1/examen_3.png')
+imagenGris = cv2.cvtColor(imagenOriginal, cv2.COLOR_BGR2GRAY)
+
+# Binarización Inversa: tinta blanca(255), papel negro(0)
+# Usamos un umbral para asegurar que las líneas de los cuadros se vean bien
+_, imagenBinaria = cv2.threshold(imagenGris, 180, 255, cv2.THRESH_BINARY_INV)
+
+# Perfil de Proyección Horizontal para encontrar las líneas de la tabla
+sumaFilas = np.sum(imagenBinaria, axis=1)
+umbralFila = imagenBinaria.shape[1] * 255 * 0.5  # Ajustado al 50% del ancho
+indicesFilas = np.where(sumaFilas > umbralFila)[0]
+
+# Función para limpiar índices repetidos (líneas de varios píxeles)
+def agruparLineas(indices, delta=10):
+    if len(indices) == 0: return []
+    limites = [indices[0]]
+    for i in range(1, len(indices)):
+        if indices[i] > indices[i-1] + delta:
+            limites.append(indices[i])
+    return limites
+
+filasTabla = agruparLineas(indicesFilas)
+
+# Seleccionamos las últimas 6 líneas (que delimitan las 10 preguntas de la tabla)
+# Si filasTabla tiene más líneas (encabezado), filtramos solo las de la tabla abajo.
+filasPreguntas = filasTabla[-6:] 
+
+# =============================================================================
+# VISUALIZACIÓN DE LÍMITES DETECTADOS
+# =============================================================================
+imagenCopiaVisualizacion = imagenOriginal.copy()
+
+# Dibujamos las líneas horizontales detectadas en Rojo
+for fila in filasTabla:
+    cv2.line(imagenCopiaVisualizacion, (0, fila), (imagenOriginal.shape[1], fila), (0, 0, 255), 2)
+# Mostramos resultados
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.title("Imagen Binaria (Entrada del Algoritmo)")
+plt.imshow(imagenBinaria, cmap='gray')
+
+plt.subplot(1, 2, 2)
+plt.title("Límites de Grilla Detectados")
+plt.imshow(cv2.cvtColor(imagenCopiaVisualizacion, cv2.COLOR_BGR2RGB))
+plt.show()
+
+# =============================================================================
+# 2. EXTRACCIÓN DE LAS 10 SUBIMÁGENES Y PROCESAMIENTO (PISTA 2)
+# =============================================================================
+
+subImagenesPreguntas = []
+
+for i in range(5):  # Para cada una de las 10 preguntas (5 filas)
+    # Límites de la fila de la pregunta i
+    yInicio = filasPreguntas[i]
+    yFin = filasPreguntas[i+1]
+    
+    # Recorte de la fila completa (Pregunta + Opciones)
+    filaCompleta = imagenBinaria[yInicio:yFin, :]
+    subImagenesPreguntas.append(filaCompleta)
+    
+    # --- PROCESAMIENTO SEGÚN PISTA 2 ---
+    # Analizamos las componentes conectadas de la fila
+    numEtiquetas, etiquetas, estadisticas, centroides = cv2.connectedComponentsWithStats(filaCompleta, 8, cv2.CV_32S)
+    
+    # Definimos umbrales de área (Pista 2)
+    # thAreaMinima: para ignorar puntitos de ruido
+    # thAreaMaxima: para ignorar el recuadro negro exterior si quedó en el recorte
+    thAreaMinima = 30 #30
+    thAreaMaxima = (yFin - yInicio) * 50 # Un valor aproximado para descartar el borde largo
+    
+    # Filtramos las estadísticas según el área (ix_area es una máscara booleana)
+    ixArea = (estadisticas[:, cv2.CC_STAT_AREA] > thAreaMinima) & (estadisticas[:, cv2.CC_STAT_AREA] < thAreaMaxima)
+    
+    # Componentes que sobrevivieron al filtro (quitando la etiqueta 0 que es el fondo)
+    componentesUtiles = []
+    for etiqueta in range(1, numEtiquetas):
+        if ixArea[etiqueta]:
+            componentesUtiles.append(etiqueta)
+
+    # Visualización de control para la primera pregunta
+    if i == 1:
+        print(f"Pregunta 1: Se detectaron {len(componentesUtiles)} componentes válidas (letras/marcas).")
+        # Aquí podrías guardar o mostrar la subimagen
+        cv2.imwrite(f'pregunta_{i+1}.png', filaCompleta)
+
+# =============================================================================
+# 3. IDENTIFICACIÓN DE LA RESPUESTA (REGIÓN AMARILLA)
+# =============================================================================
+
+# Para "meternos" en la región amarilla (la respuesta envuelta por una línea),
+# lo ideal es hacer un segundo recorte vertical dentro de cada 'filaCompleta' 
+# usando las columnas detectadas (sumaColumnas).
+
+print(f"Se han generado {len(subImagenesPreguntas)} subimágenes de filas correctamente.")
