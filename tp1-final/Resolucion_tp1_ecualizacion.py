@@ -72,7 +72,7 @@ def ecualizacion_local(img, M, N):
     return img_out
 
 
-img = cv2.imread('TP_1/Imagen_con_detalles_escondidos.tif', cv2.IMREAD_GRAYSCALE)
+img = cv2.imread('tp1-final/Imagen_con_detalles_escondidos.tif', cv2.IMREAD_GRAYSCALE)
 
 plt.imshow(img, cmap='gray'), plt.show(block=False)
 
