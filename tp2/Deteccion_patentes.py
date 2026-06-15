@@ -41,11 +41,15 @@ AZUL_HSV_BAJO  = np.array([100, 80, 50])
 AZUL_HSV_ALTO  = np.array([130, 255, 255])
 
 # Segmentación de caracteres (Parte B)
-RATIO_SEG_MIN  = 1.2
-RATIO_SEG_MAX  = 2.5
-AREA_SEG_MIN   = 0.03
-AREA_SEG_MAX   = 0.20
+# RATIO_SEG_MIN  = 1.2
+# RATIO_SEG_MAX  = 2.5
+# AREA_SEG_MIN   = 0.03
+# AREA_SEG_MAX   = 0.20
 
+RATIO_SEG_MIN = 1.0
+RATIO_SEG_MAX = 4.0
+AREA_SEG_MIN = 0.02
+AREA_SEG_MAX = 0.25
 
 # ==============================================================================
 # FUNCIÓN 1: cargar y redimensionar
@@ -316,9 +320,235 @@ def segmentar_caracteres(crop, crop_gray):
     return caracteres_validos, crop_debug
 
 
+
+# ============== funcion extraer candidatos alternativo sin comentarios ======================================
+# def extraer_candidatos_alternativo(img_gray, img_area):
+
+#     kernel_bh = cv2.getStructuringElement( cv2.MORPH_RECT, (13, 5))
+
+#     blackhat = cv2.morphologyEx( img_gray, cv2.MORPH_BLACKHAT, kernel_bh)
+
+#     grad_x = cv2.Sobel(blackhat, cv2.CV_32F, 1, 0, ksize=3)
+
+#     grad_x = np.absolute(grad_x)
+
+#     grad_x = cv2.normalize(grad_x, None, 0, 255, cv2.NORM_MINMAX).astype("uint8")
+
+#     grad_x = cv2.GaussianBlur( grad_x, (5,5), 0)
+
+#     _, thresh = cv2.threshold( grad_x, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+#     kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (17,5))
+
+#     thresh = cv2.morphologyEx( thresh, cv2.MORPH_CLOSE, kernel_close)
+
+#     thresh = cv2.dilate( thresh, None, iterations=2)
+
+#     contornos, _ = cv2.findContours( thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+#     candidatos = []
+
+#     for cnt in contornos:
+
+#         x, y, w, h = cv2.boundingRect(cnt)
+
+#         if h == 0:
+#             continue
+
+#         ratio = w / h
+
+#         area_rel = (w * h) / img_area
+
+#         if (2.0 < ratio < 6.0 and 0.003 < area_rel < 0.08):
+            
+#             candidatos.append((x,y,w,h,ratio,area_rel,cnt))
+
+#     candidatos = sorted(
+#         candidatos,
+#         key=lambda c: c[5],
+#         reverse=True
+#     )
+
+#     print(
+#         f"  Candidatos alternativos: "
+#         f"{len(candidatos)}"
+#     )
+
+#     return candidatos
+
+
+# misma funcionque la anterior con comentarios detallados explicando cada paso del pipeline 
+def extraer_candidatos_alternativo(img_gray, img_area):
+    """
+    Pipeline alternativo para la detección de la ROI de la patente.
+    Combina operadores morfológicos (U6) y detección de bordes por gradiente (U3)
+    para aislar regiones con alta densidad de transiciones verticales.
+    """
+    
+    # 1. Definición del Elemento Estructural (SE) rectangular y asimétrico (Unidad 6)
+    # Al ser más ancho que alto (13x5), se adapta al formato alargado de la patente.
+    kernel_bh = cv2.getStructuringElement(cv2.MORPH_RECT, (13, 5))
+
+    # 2. Operación Morfológica de BlackHat (Unidad 6)
+    # BlackHat = Clausura(Img) - Img. Resalta elementos oscuros sobre fondos claros, 
+    # ideal para aislar los caracteres negros de la patente sobre la placa blanca.
+    blackhat = cv2.morphologyEx(img_gray, cv2.MORPH_BLACKHAT, kernel_bh)
+
+    # 3. Operador de Derivada Espacial Sobel en el eje X (Unidad 3 - Segmentación por Bordes)
+    # Calcula la primera derivada horizontal (dx=1, dy=0). Como los caracteres de la patente 
+    # generan muchos cambios bruscos de intensidad de izquierda a derecha, SobelX produce un 
+    # patrón denso de bordes verticales de alta frecuencia espaciados muy cerca entre sí.
+    grad_x = cv2.Sobel(blackhat, cv2.CV_32F, 1, 0, ksize=3)
+
+    # 4. Cálculo del Valor Absoluto (Unidad 3)
+    # Las transiciones de blanco a negro dan derivadas negativas y de negro a blanco positivas.
+    # El valor absoluto unifica ambos bordes en valores positivos de magnitud de gradiente.
+    grad_x = np.absolute(grad_x)
+
+    # 5. Normalización y Casteo de Tipo de Dato (Unidad 1 - Fundamentos)
+    # Escala linealmente el rango dinámico de las amplitudes de gradiente a [0, 255].
+    # Luego se convierte a uint8 (enteros de 8 bits sin signo) requerido por las funciones de OpenCV.
+    grad_x = cv2.normalize(grad_x, None, 0, 255, cv2.NORM_MINMAX).astype("uint8")
+
+    # 6. Suavizado mediante Filtro Gaussiano Lineal (Unidad 2 - Filtrado Espacial)
+    # Un filtro de media pesada pasabajo con máscara de 5x5. Borra variaciones de ruido de alta
+    # frecuencia y ayuda a que los bordes individuales de los caracteres comiencen a "difundirse"
+    # y conectarse entre sí espaciadamente en una sola masa difusa regional.
+    grad_x = cv2.GaussianBlur(grad_x, (5, 5), 0)
+
+    # 7. Segmentación por Umbralado Global usando el Método de Otsu (Unidad 3 - Segmentación)
+    # Binariza la imagen calculando automáticamente el umbral 'T' óptimo que maximiza la varianza 
+    # interclase del histograma bimodal resultante, separando las zonas con mucho texto (blanco) del resto.
+    _, thresh = cv2.threshold(grad_x, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # 8. Operación Morfológica de Clausura (Unidad 6)
+    # Clausura = Dilatación seguida de Erosión. Al aplicar un elemento estructural horizontal (17x5),
+    # conecta y fusiona todos los caracteres binarizados individuales de la patente en un único bloque 
+    # rectangular continuo y sólido, cerrando los gaps (huecos) inter-caracteres.
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 5))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close)
+
+    # 9. Operación de Dilatación Morfológica (Unidad 6)
+    # Aplica 2 iteraciones de dilatación pura para "engrosar" las regiones blancas binarizadas.
+    # Asegura la continuidad de los bordes externos y rellena cualquier microporo residual.
+    thresh = cv2.dilate(thresh, None, iterations=2)
+
+    # 10. Extracción de Contornos Externos (Unidad 3)
+    # RETR_EXTERNAL recupera únicamente las siluetas exteriores del bloque (descarta huecos internos).
+    # CHAIN_APPROX_SIMPLE comprime los segmentos horizontales, verticales y diagonales redundantes.
+    contornos, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    candidatos = []
+
+    # 11. Filtrado Geométrico de Candidatos (Unidad 3 - Descriptores de Forma)
+    for cnt in contornos:
+        # Obtiene la caja contenedora alineada a los ejes (Bounding Box)
+        x, y, w, h = cv2.boundingRect(cnt)
+
+        # Control de seguridad matemática para evitar indeterminaciones (división por cero)
+        if h == 0:
+            continue
+
+        # Calcula la Relación de Aspecto (Aspect Ratio = ancho / alto)
+        # La patente Mercosur/Argentina ideal posee un valor de aprox. 3.08 (400mm / 130mm)
+        ratio = w / h
+
+        # Calcula el Área Relativa de la componente respecto al área total de la imagen
+        area_rel = (w * h) / img_area
+
+        # Filtro de Clasificación Geométrica basado en el conocimiento a priori de la placa:
+        # Filtra que la relación de aspecto sea horizontal alargada (2.0 < ratio < 6.0)
+        # y que el objeto no sea ni gigante (carrocería) ni minúsculo (ruido): (0.003 < area_rel < 0.08)
+        if (2.0 < ratio < 6.0 and 0.003 < area_rel < 0.08):
+            # Guardamos las estadísticas y el contorno del candidato que superó la condición
+            candidatos.append((x, y, w, h, ratio, area_rel, cnt))
+
+    # 12. Ordenamiento de Datos (Lógica de NumPy / Python)
+    # Ordena la lista de mayor a menor basándose en el descriptor de Área Relativa (índice 5).
+    # Asume de forma heurística que la patente será una de las componentes válidas de mayor tamaño.
+    candidatos = sorted(
+        candidatos,
+        key=lambda c: c[5],
+        reverse=True
+    )
+
+    print(
+        f"  Candidatos alternativos: "
+        f"{len(candidatos)}"
+    )
+
+    return candidatos
+
 # ==============================================================================
 # FUNCIÓN 7: procesar una imagen completa
 # ==============================================================================
+
+# def procesar_imagen(path, mostrar=False):
+#     """
+#     Ejecuta el pipeline completo sobre una imagen:
+#       1. Cargar y redimensionar
+#       2. Detectar bordes
+#       3. Extraer y filtrar candidatos
+#       4. Puntuar candidatos
+#       5. Seleccionar ganador
+#       6. Segmentar caracteres
+
+#     Retorna: crop_ganador (RGB), caracteres_validos, puntaje_max
+#              o (None, [], 0) si no hay candidatos.
+#     """
+#     print(f"\n{'='*60}")
+#     print(f"Procesando: {path}")
+#     print(f"{'='*60}")
+
+#     # 1. Cargar
+#     img_bgr, img_rgb, img_gray = cargar_imagen(path)
+#     img_h, img_w = img_gray.shape[:2]
+#     img_area = img_h * img_w
+
+#     # 2. Bordes
+#     edges = detectar_bordes(img_gray)
+
+#     # 3. Candidatos
+#     candidatos_sorted = extraer_candidatos(edges, img_area)
+
+#     if not candidatos_sorted:
+#         print("  Sin candidatos tras el filtro. Imagen no procesada.")
+#         return None, [], 0
+
+#     # 4. Puntuar (se pasa img_bgr para el criterio de azul)
+#     puntajes = puntuar_candidatos(candidatos_sorted, img_gray, img_bgr)
+
+#     # 5. Ganador
+#     idx_ganador = seleccionar_ganador(candidatos_sorted, puntajes)
+#     puntaje_max = max(puntajes)
+
+#     x, y, w, h, ratio, area_rel, cnt = candidatos_sorted[idx_ganador]
+#     crop_ganador  = img_rgb[y:y+h, x:x+w]
+#     crop_gray_win = img_gray[y:y+h, x:x+w]
+
+#     # 6. Segmentar
+#     caracteres_validos, crop_debug = segmentar_caracteres(crop_ganador,
+#                                                           crop_gray_win)
+
+#     # Visualización opcional
+#     if mostrar:
+#         fig, axs = plt.subplots(1, 3, figsize=(14, 4))
+#         axs[0].imshow(img_rgb)
+#         axs[0].set_title('Original')
+#         axs[0].axis('off')
+#         axs[1].imshow(crop_ganador)
+#         axs[1].set_title(f'Ganador (ratio={ratio:.2f}, pts={puntaje_max})')
+#         axs[1].axis('off')
+#         axs[2].imshow(crop_debug)
+#         axs[2].set_title(f'Caracteres ({len(caracteres_validos)})')
+#         axs[2].axis('off')
+#         fig.suptitle(path)
+#         plt.tight_layout()
+#         plt.show(block=False)
+
+#     return crop_ganador, caracteres_validos, puntaje_max
+
+# ========================== prueba con filtro alternativo =======================================
 
 def procesar_imagen(path, mostrar=False):
     """
@@ -359,6 +589,32 @@ def procesar_imagen(path, mostrar=False):
     idx_ganador = seleccionar_ganador(candidatos_sorted, puntajes)
     puntaje_max = max(puntajes)
 
+    # Prueba de filtro alternativo si el puntaje es bajo
+    if puntaje_max < 2:
+
+        print("\n>>> Puntaje bajo.", "\n>>> Ejecutando detector alternativo...")
+
+        candidatos_alt = extraer_candidatos_alternativo( img_gray, img_area)
+
+        if candidatos_alt:
+
+            puntajes_alt = puntuar_candidatos( candidatos_alt, img_gray, img_bgr)
+
+            if max(puntajes_alt) > puntaje_max:
+
+                print(
+                    ">>> Detector alternativo mejoró "
+                    "el resultado."
+                )
+
+                candidatos_sorted = candidatos_alt
+
+                puntajes = puntajes_alt
+
+                idx_ganador = seleccionar_ganador( candidatos_sorted, puntajes)
+
+                puntaje_max = max(puntajes)
+
     x, y, w, h, ratio, area_rel, cnt = candidatos_sorted[idx_ganador]
     crop_ganador  = img_rgb[y:y+h, x:x+w]
     crop_gray_win = img_gray[y:y+h, x:x+w]
@@ -395,7 +651,8 @@ if __name__ == '__main__':
     resultados = {}
 
     for n in range(1, 13):
-        path = f'img_{n}.jpg'
+        #path = f'img_{n}.jpg'
+        path = f'tp2-pruebas/img_{n}.jpg'
         try:
             crop, caracteres, puntaje = procesar_imagen(path, mostrar=True)
             resultados[path] = {
@@ -416,7 +673,7 @@ if __name__ == '__main__':
     exitos = 0
     for path, r in resultados.items():
         marca = 'SI' if r['exito'] else 'NO'
-        if r['exito']:
+        if r['caracteres'] == 7:
             exitos += 1
         print(f"{path:<12} {marca:>6} {r['puntaje']:>8} {r['caracteres']:>11}")
     print(f"\nDetectadas correctamente: {exitos}/12")
