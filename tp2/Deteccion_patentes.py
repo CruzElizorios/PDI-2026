@@ -479,6 +479,57 @@ def extraer_candidatos_alternativo(img_gray, img_area):
 
     return candidatos
 
+def mostrar_segmentacion(crop_patente, caracteres_validos, margen=3):
+    """
+    Muestra:
+    - La patente completa
+    - Cada carácter recortado individualmente
+
+    margen: píxeles extra alrededor del bounding box para evitar cortes.
+    """
+
+    import matplotlib.pyplot as plt
+    import cv2
+
+    if len(caracteres_validos) == 0:
+        print("No hay caracteres para mostrar.")
+        return
+
+    h_roi, w_roi = crop_patente.shape[:2]
+
+    n = len(caracteres_validos)
+
+    fig, axes = plt.subplots(
+        1,
+        n + 1,
+        figsize=(2 * (n + 1), 4)
+    )
+
+    # Patente completa
+    axes[0].imshow(cv2.cvtColor(crop_patente, cv2.COLOR_BGR2RGB))
+    axes[0].set_title("Patente")
+    axes[0].axis("off")
+
+    # Caracteres individuales
+    for i, (x, y, w, h) in enumerate(caracteres_validos):
+
+        # Agregar margen evitando salir del ROI
+        x1 = max(0, x - margen)
+        y1 = max(0, y - margen)
+
+        x2 = min(w_roi, x + w + margen)
+        y2 = min(h_roi, y + h + margen)
+
+        char_crop = crop_patente[y1:y2, x1:x2]
+
+        axes[i + 1].imshow(cv2.cvtColor(char_crop, cv2.COLOR_BGR2RGB))
+
+        axes[i + 1].set_title(f"C{i+1}")
+        axes[i + 1].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
 # ==============================================================================
 # FUNCIÓN 7: procesar una imagen completa
 # ==============================================================================
@@ -547,6 +598,104 @@ def extraer_candidatos_alternativo(img_gray, img_area):
 #         plt.show(block=False)
 
 #     return crop_ganador, caracteres_validos, puntaje_max
+
+def mejorar_caracter(char_crop):
+    """
+    Mejora visualmente un carácter para mostrarlo.
+    No afecta la detección, sólo la visualización.
+    """
+
+    gray = cv2.cvtColor(char_crop, cv2.COLOR_BGR2GRAY)
+
+    # # mejora contraste
+    # gray = cv2.equalizeHist(gray)
+
+    # # agrandar
+    # # gray = cv2.resize(
+    # #     gray,
+    # #     None,
+    # #     fx=2,
+    # #     fy=2,
+    # #     interpolation=cv2.INTER_CUBIC
+    # # )
+
+    # # binarizar
+    # _, gray = cv2.threshold(
+    #     gray,
+    #     120,
+    #     255,
+    #     cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    # )
+
+    return gray
+
+
+
+def mostrar_resultado_final( nombre_archivo, crop_patente, caracteres_validos, margen=4):
+    """
+    Muestra:
+    [Patente][C1][C2][C3]...[Cn]
+
+    en una única figura.
+    """
+
+    import matplotlib.pyplot as plt
+
+    if len(caracteres_validos) == 0:
+
+        fig, ax = plt.subplots(1, 1, figsize=(5,3))
+
+        ax.imshow(cv2.cvtColor(crop_patente, cv2.COLOR_BGR2RGB))
+
+        ax.set_title(f"{nombre_archivo}\nPatente detectada")
+
+        ax.axis("off")
+
+        plt.tight_layout()
+        plt.show()
+
+        return
+
+    h_roi, w_roi = crop_patente.shape[:2]
+
+    ncols = len(caracteres_validos) + 1
+
+    fig, axes = plt.subplots( 1, ncols, figsize=(2*ncols, 3))
+
+    fig.suptitle( nombre_archivo, fontsize=12, fontweight="bold")
+
+    # ------------------------
+    # patente completa
+    # ------------------------
+    axes[0].imshow( cv2.cvtColor( crop_patente, cv2.COLOR_BGR2RGB))
+
+    axes[0].set_title("Patente")
+    axes[0].axis("off")
+
+    # ------------------------
+    # caracteres
+    # ------------------------
+    for i, (x, y, w, h) in enumerate(caracteres_validos):
+
+        x1 = max(0, x - margen)
+        y1 = max(0, y - margen)
+
+        x2 = min(w_roi, x + w + margen)
+        y2 = min(h_roi, y + h + margen)
+
+        char_crop = crop_patente[y1:y2, x1:x2]
+
+        char_vis = mejorar_caracter(char_crop)
+
+        axes[i+1].imshow(char_vis,cmap="gray")
+
+        axes[i+1].set_title(f"C{i+1}")
+
+        axes[i+1].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
 
 # ========================== prueba con filtro alternativo =======================================
 
@@ -622,6 +771,8 @@ def procesar_imagen(path, mostrar=False):
     # 6. Segmentar
     caracteres_validos, crop_debug = segmentar_caracteres(crop_ganador,
                                                           crop_gray_win)
+    #  Recortar
+    #mostrar_segmentacion( crop_ganador, caracteres_validos, margen=2)
 
     # Visualización opcional
     if mostrar:
@@ -638,6 +789,12 @@ def procesar_imagen(path, mostrar=False):
         fig.suptitle(path)
         plt.tight_layout()
         plt.show(block=False)
+    
+    mostrar_resultado_final(
+        path,
+        crop_ganador,
+        caracteres_validos
+)
 
     return crop_ganador, caracteres_validos, puntaje_max
 
